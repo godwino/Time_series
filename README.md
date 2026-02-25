@@ -1,5 +1,8 @@
 # Predictive Analytics With Time Series Data
 
+## Demo
+![Project Demo](assets/demo.gif)
+
 ## Portfolio Positioning
 This project demonstrates production-style time-series forecasting with transparent evaluation, model comparison, and business-ready reporting outputs.
 
