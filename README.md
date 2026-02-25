@@ -64,6 +64,7 @@ Classical methods are strong for linear, stationary series, but many real-world 
 ## Quick Start
 1. Install dependencies:
    - `pip install -r requirements.txt`
+   - Optional for LSTM: `pip install torch`
 2. One-command run (install + compare + open outputs):
    - `powershell -ExecutionPolicy Bypass -File .\run_all.ps1`
 3. Run baseline:
@@ -72,8 +73,12 @@ Classical methods are strong for linear, stationary series, but many real-world 
    - `python src/run_arima.py --ticker AAPL --period 5y --test-size 0.2 --p 5 --d 1 --q 0`
 5. Run Prophet:
    - `python src/run_prophet.py --ticker AAPL --period 5y --test-size 0.2`
-6. Compare all models:
+6. Run LSTM (optional):
+   - `python src/run_lstm.py --ticker AAPL --period 5y --test-size 0.2 --seq-len 30 --hidden-size 32 --epochs 40 --lr 0.001`
+7. Compare all models:
    - `python src/compare_models.py --ticker AAPL --period 5y --test-size 0.2 --p 5 --d 1 --q 0`
+   - Include LSTM in comparison:
+   - `python src/compare_models.py --ticker AAPL --period 5y --test-size 0.2 --p 5 --d 1 --q 0 --include-lstm --lstm-seq-len 30 --lstm-hidden-size 32 --lstm-epochs 40 --lstm-lr 0.001`
    - Artifacts generated:
    - `outputs/forecast_comparison.png`
    - `outputs/model_metrics.csv`

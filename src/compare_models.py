@@ -11,6 +11,14 @@ from statsmodels.tsa.arima.model import ARIMA
 from preprocess import prepare_time_series
 
 
+def create_sequences(values: np.ndarray, seq_len: int):
+    x_vals, y_vals = [], []
+    for i in range(len(values) - seq_len):
+        x_vals.append(values[i : i + seq_len])
+        y_vals.append(values[i + seq_len])
+    return np.array(x_vals), np.array(y_vals)
+
+
 def naive_forecast(train: pd.Series, test_len: int) -> pd.Series:
     # Baseline: repeat the last known value for all future timestamps.
     return pd.Series([train.iloc[-1]] * test_len)
@@ -61,6 +69,75 @@ def run_prophet(df: pd.DataFrame, split_idx: int) -> dict:
         "rmse": mean_squared_error(test["y"].values, preds.values) ** 0.5,
     }
     return metrics, preds
+
+
+def run_lstm(
+    train: pd.Series,
+    test: pd.Series,
+    seq_len: int,
+    hidden_size: int,
+    epochs: int,
+    learning_rate: float,
+) -> dict:
+    try:
+        import torch
+        import torch.nn as nn
+    except ImportError as exc:
+        raise ImportError("PyTorch is required for LSTM. Install with: pip install torch") from exc
+
+    if len(train) <= seq_len:
+        raise ValueError(f"Train size must be > seq_len. Got train={len(train)}, seq_len={seq_len}.")
+
+    train_values = train.values.astype(np.float32)
+    mean_val = float(train_values.mean())
+    std_val = float(train_values.std()) or 1.0
+    scaled_train = (train_values - mean_val) / std_val
+
+    x_train, y_train = create_sequences(scaled_train, seq_len)
+    x_train = torch.tensor(x_train, dtype=torch.float32).unsqueeze(-1)
+    y_train = torch.tensor(y_train, dtype=torch.float32).unsqueeze(-1)
+
+    class LSTMRegressor(nn.Module):
+        def __init__(self, hidden: int):
+            super().__init__()
+            self.lstm = nn.LSTM(input_size=1, hidden_size=hidden, batch_first=True)
+            self.fc = nn.Linear(hidden, 1)
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            return self.fc(out[:, -1, :])
+
+    torch.manual_seed(42)
+    model = LSTMRegressor(hidden_size)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    model.train()
+    for _ in range(epochs):
+        optimizer.zero_grad()
+        pred = model(x_train)
+        loss = criterion(pred, y_train)
+        loss.backward()
+        optimizer.step()
+
+    model.eval()
+    preds_scaled = []
+    rolling_seq = scaled_train[-seq_len:].copy()
+    with torch.no_grad():
+        for _ in range(len(test)):
+            x_input = torch.tensor(rolling_seq, dtype=torch.float32).view(1, seq_len, 1)
+            next_scaled = model(x_input).item()
+            preds_scaled.append(next_scaled)
+            rolling_seq = np.append(rolling_seq[1:], next_scaled)
+
+    preds = np.array(preds_scaled) * std_val + mean_val
+    preds_series = pd.Series(preds, index=test.index)
+    metrics = {
+        "model": "LSTM",
+        "mae": mean_absolute_error(test.values, preds_series.values),
+        "rmse": mean_squared_error(test.values, preds_series.values) ** 0.5,
+    }
+    return metrics, preds_series
 
 
 def save_comparison_plot(test: pd.Series, model_preds: dict, plot_path: str) -> None:
@@ -158,6 +235,11 @@ def main() -> None:
     parser.add_argument("--p", type=int, default=5, help="ARIMA p")
     parser.add_argument("--d", type=int, default=1, help="ARIMA d")
     parser.add_argument("--q", type=int, default=0, help="ARIMA q")
+    parser.add_argument("--include-lstm", action="store_true", help="Include LSTM model (requires PyTorch)")
+    parser.add_argument("--lstm-seq-len", type=int, default=30, help="LSTM lookback window size")
+    parser.add_argument("--lstm-hidden-size", type=int, default=32, help="LSTM hidden layer size")
+    parser.add_argument("--lstm-epochs", type=int, default=40, help="LSTM training epochs")
+    parser.add_argument("--lstm-lr", type=float, default=0.001, help="LSTM learning rate")
     parser.add_argument(
         "--plot-path",
         type=str,
@@ -212,6 +294,18 @@ def main() -> None:
     prophet_metrics, prophet_preds = run_prophet(df, split_idx=split_idx)
     results.append(prophet_metrics)
     model_preds[prophet_metrics["model"]] = prophet_preds
+
+    if args.include_lstm:
+        lstm_metrics, lstm_preds = run_lstm(
+            train=train,
+            test=test,
+            seq_len=args.lstm_seq_len,
+            hidden_size=args.lstm_hidden_size,
+            epochs=args.lstm_epochs,
+            learning_rate=args.lstm_lr,
+        )
+        results.append(lstm_metrics)
+        model_preds[lstm_metrics["model"]] = lstm_preds
 
     # Rank models by error (lower MAE/RMSE is better), then enrich for business-facing reporting.
     results_df = pd.DataFrame(results).sort_values(["mae", "rmse"], ascending=True).reset_index(drop=True)
